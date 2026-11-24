@@ -48,6 +48,11 @@ input[type=text],input[type=search],input[type=number],input[type=tel],select{wi
 .stepper .btn{width:64px;height:64px;font-size:28px;flex:0 0 auto}
 .chips{display:flex;flex-wrap:wrap;gap:8px}
 .chips button{min-height:40px;padding:0 14px;border-radius:20px;border:1px solid var(--line);background:#fff;font-weight:600;cursor:pointer}
+.chips button[aria-pressed=true]{background:var(--accent);color:#fff;border-color:var(--accent)}
+.sortRow{display:flex;gap:6px;align-items:center}
+.sortRow select{flex:1;min-height:40px;padding:6px 10px;font-size:14px}
+.sortRow .btn{min-height:40px;width:44px;padding:0;flex:0 0 auto}
+.sortRow .btn[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:#fff}
 .list{display:flex;flex-direction:column}
 .item{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:12px 0;border-top:1px solid var(--soft);cursor:pointer;background:none;border-left:none;border-right:none;border-bottom:none;text-align:left;width:100%}
 .item:first-child{border-top:none}
@@ -103,7 +108,9 @@ nav.tabs .badge{position:absolute;top:4px;right:calc(50% - 30px);background:var(
         <button type="button" data-v="ud" aria-pressed="true">Tag ud</button>
         <button type="button" data-v="ind" aria-pressed="false">Fyld op</button>
       </div>
-      <div id="sagBox">
+      <div id="sagBox" style="display:flex;flex-direction:column;gap:8px">
+        <div class="chips" id="bfChips" role="group" aria-label="Vis kun boligforening"></div>
+        <div class="sortRow" id="sortRow"></div>
         <label class="f">Sag (materialet skrives på timesedlen)
           <select id="sagValg"></select>
         </label>
@@ -163,7 +170,7 @@ nav.tabs .badge{position:absolute;top:4px;right:calc(50% - 30px);background:var(
 <script>
 (function(){
   "use strict";
-  const VERSION = "0.1.0";
+  const VERSION = "0.2.0";
   const $ = id => document.getElementById(id);
   function el(tag, attrs, ...kids){
     const e=document.createElement(tag);
@@ -261,9 +268,10 @@ nav.tabs .badge{position:absolute;top:4px;right:calc(50% - 30px);background:var(
   // ================= TIMER-APPEN (sager + materialer på timesedlen) =================
   // Timer-appens egne data røres kun gennem dens synkronisering: vi henter sager og sender nye materiale-poster.
   let timer = ls.get("fb_timer",{sager:[],faste:[],hentet:0,status:"ukendt"});
-  let timerUd = ls.get("fb_timer_ud",[]);   // poster der venter på at blive sendt til Timer
+  let timerUd = ls.get("fb_timer_ud",[]);
+  const SORT_STD={brugt:false,nr:true,adresse:true,bf:true,oprettet:false};  // naturlig retning pr. felt (true = stigende)   // poster der venter på at blive sendt til Timer
   function gemTimer(){ ls.set("fb_timer",timer); ls.set("fb_timer_ud",timerUd); }
-  function sagNavn(s){ return ((s.bf?s.bf+" ":"")+s.nr+" "+(s.adresse||"")).trim(); }
+  function sagNavn(s){ return s ? ((s.bf? s.bf+" · ":"")+"Sag "+s.nr+" · "+(s.adresse||"")) : "Ukendt sag"; }
   async function hentFraTimer(){
     if(!HA) return;
     try{
@@ -272,10 +280,11 @@ nav.tabs .badge{position:absolute;top:4px;right:calc(50% - 30px);background:var(
       if(!r.ok) throw new Error("timer "+r.status);
       const j=await r.json(); const alle=j.poster||[];
       const brugt={};
-      for(const p of alle) if(p.kind==="post" && !p.deleted) brugt[p.sagId]=Math.max(brugt[p.sagId]||0,p.updated||0);
+      for(const p of alle) if(p.kind==="post" && !p.deleted) brugt[p.sagId]=Math.max(brugt[p.sagId]||0,p.oprettet||0);
       timer.sager=alle.filter(p=>p.kind==="sag" && !p.deleted && !p.arkiveret)
-        .sort((a,b)=>((brugt[b.id]||0)-(brugt[a.id]||0)) || ((b.updated||0)-(a.updated||0)))
-        .map(s=>({id:s.id,nr:s.nr,adresse:s.adresse,bf:s.bf||""}));
+        .map(s=>({id:s.id,nr:s.nr,adresse:s.adresse,bf:s.bf||"",oprettet:s.oprettet||0,brugt:brugt[s.id]||0}));
+      const si=alle.find(p=>p.id==="indst-sort" && !p.deleted);
+      if(si && SORT_STD.hasOwnProperty(si.felt) && !timerUd.some(p=>p.id==="indst-sort")) timer.sort={felt:si.felt, op:!!si.op, updated:si.updated||0};
       timer.faste=alle.filter(p=>p.kind==="fast" && !p.deleted).map(f=>({navn:f.navn,enhed:f.enhed||"stk",varenr:f.varenr||""}));
       timer.hentet=Date.now(); timer.status="ok";
       const ids=new Set(sendt.map(p=>p.id+":"+p.updated)); timerUd=timerUd.filter(p=>!ids.has(p.id+":"+p.updated));
@@ -352,13 +361,58 @@ nav.tabs .badge{position:absolute;top:4px;right:calc(50% - 30px);background:var(
     $("sagBox").classList.toggle("hidden", mode!=="ud");
   }
   $("sagValg").addEventListener("change",()=>{ valgtSag=$("sagValg").value; ls.set("fb_sag",valgtSag); });
+  // ---- Samme sortering og boligforenings-filter som Timer-appen ----
+  // Sorteringen er Timers egen indstilling (følger brugeren); filteret deles med Timer på samme enhed.
+  function sortIndst(){ const t=timer.sort; return (t && SORT_STD.hasOwnProperty(t.felt)) ? t : {felt:"brugt", op:false}; }
+  function sorterSager(liste){
+    const {felt, op}=sortIndst();
+    const sml=(a,b)=>String(a||"").localeCompare(String(b||""),"da",{numeric:true,sensitivity:"base"});
+    const key={
+      brugt:(a,b)=>(a.brugt||a.oprettet||0)-(b.brugt||b.oprettet||0),
+      nr:(a,b)=>sml(a.nr,b.nr),
+      adresse:(a,b)=>sml(a.adresse,b.adresse)||sml(a.nr,b.nr),
+      bf:(a,b)=>sml(a.bf,b.bf)||sml(a.adresse,b.adresse),
+      oprettet:(a,b)=>(a.oprettet||0)-(b.oprettet||0)
+    }[felt];
+    const r=op?1:-1;
+    return liste.slice().sort((a,b)=>{ if(felt==="bf" && !a.bf!==!b.bf) return a.bf? -1 : 1; return key(a,b)*r; });
+  }
+  function gemSort(felt, op){
+    const prev=timer.sort||{}; const nu=Math.max(Date.now(), (prev.updated||0)+1);
+    timer.sort={felt, op, updated:nu};
+    timerUd=timerUd.filter(p=>p.id!=="indst-sort");
+    sendTilTimer({id:"indst-sort", kind:"indstilling", felt, op, updated:nu});
+    renderSager(); toast("Sortering gemt – gælder også i Timer");
+  }
+  const ANDRE="__andre";
+  let bfFilter=""; try{ bfFilter=localStorage.getItem("tm_bf")||""; }catch(e){}
+  const bfMatch=s=>!bfFilter || (bfFilter===ANDRE ? !s.bf : (s.bf||"")===bfFilter);
+  function alleBf(){ return [...new Set(timer.sager.map(s=>s.bf).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"da")); }
+  function tegnBfChips(box, efter){
+    const liste=alleBf();
+    if(bfFilter && bfFilter!==ANDRE && !liste.includes(bfFilter)) bfFilter="";
+    box.classList.toggle("hidden", liste.length===0);
+    box.replaceChildren(...["",...liste,ANDRE].map(b=>el("button",{type:"button","aria-pressed":b===bfFilter?"true":"false",title:b===ANDRE?"Sager uden boligforening":(b||"Alle sager"),
+      onclick:()=>{ bfFilter=b; try{ localStorage.setItem("tm_bf",b); }catch(e){} renderSager(); if(efter) efter(); }},
+      b===ANDRE? "Andre" : (b? b.slice(0,3) : "Alle"))));
+  }
+  function tegnSort(box){
+    const {felt,op}=sortIndst();
+    const sel=el("select",{"aria-label":"Sortér sager efter"}, ...[["brugt","Senest brugt"],["nr","Sagsnummer"],["adresse","Adresse"],["bf","Boligforening"],["oprettet","Oprettet"]].map(([v,t])=>el("option",{value:v},"Sortér: "+t)));
+    sel.value=felt; sel.addEventListener("change",()=>gemSort(sel.value, SORT_STD[sel.value]));
+    box.replaceChildren(sel,
+      el("button",{type:"button",class:"btn","aria-pressed":op?"true":"false",title:"Stigende",onclick:()=>gemSort(felt,true)},"↑"),
+      el("button",{type:"button",class:"btn","aria-pressed":op?"false":"true",title:"Faldende",onclick:()=>gemSort(felt,false)},"↓"));
+  }
   function sagOptions(sel, valgt){
-    sel.replaceChildren(el("option",{value:""},"Ingen sag – kun lager"), ...timer.sager.map(s=>el("option",{value:s.id},sagNavn(s))));
-    if(valgt && !timer.sager.some(s=>s.id===valgt)) valgt="";
+    const liste=sorterSager(timer.sager.filter(bfMatch));
+    sel.replaceChildren(el("option",{value:""},"Ingen sag – kun lager"), ...liste.map(s=>el("option",{value:s.id},sagNavn(s))));
+    if(valgt && !liste.some(s=>s.id===valgt)) valgt="";
     sel.value=valgt||"";
   }
   function renderSager(){
-    sagOptions($("sagValg"), valgtSag);
+    tegnBfChips($("bfChips")); tegnSort($("sortRow")); $("sortRow").classList.toggle("hidden", !timer.sager.length);
+    sagOptions($("sagValg"), valgtSag); if(valgtSag && $("sagValg").value!==valgtSag){ valgtSag=""; ls.set("fb_sag",""); }
     let info="";
     if(!HA) info="Timer-appen kan kun nås, når appen åbnes fra Home Assistant.";
     else if(timer.status==="mangler") info="Timer-appen blev ikke fundet i Home Assistant – materialer gemmes kun i lageret.";
@@ -468,7 +522,10 @@ nav.tabs .badge{position:absolute;top:4px;right:calc(50% - 30px);background:var(
     const sagSel=el("select");
     sagOptions(sagSel, valgtSag);
     const timerChk=el("input",{type:"checkbox",checked:true});
-    const sagFelt=el("div",null, el("label",{class:"f"},"Sag", sagSel), el("label",{class:"check"}, timerChk, "Skriv på timesedlen i Timer-appen"));
+    const arkChips=el("div",{class:"chips",style:"margin-bottom:8px"});
+    const tegnArkChips=()=>tegnBfChips(arkChips, ()=>{ sagOptions(sagSel, sagSel.value); tegnArkChips(); tegn(); });
+    tegnArkChips();
+    const sagFelt=el("div",null, arkChips, el("label",{class:"f"},"Sag", sagSel), el("label",{class:"check"}, timerChk, "Skriv på timesedlen i Timer-appen"));
     const knap=el("button",{type:"button",class:"btn big"});
 
     function tegn(){
