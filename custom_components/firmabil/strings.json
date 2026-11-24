@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Firmabil",
+        "description": "Holder styr på materialerne i firmabilen. Appen findes i sidemenuen under Firmabil."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Firmabil er allerede sat op."
+    }
+  }
+}

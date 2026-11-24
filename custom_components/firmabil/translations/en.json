@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Firmabil",
+        "description": "Keeps track of materials in the company van. The app is in the sidebar under Firmabil."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Firmabil is already set up."
+    }
+  }
+}
