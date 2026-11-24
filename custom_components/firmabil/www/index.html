@@ -49,10 +49,7 @@ input[type=text],input[type=search],input[type=number],input[type=tel],select{wi
 .chips{display:flex;flex-wrap:wrap;gap:8px}
 .chips button{min-height:40px;padding:0 14px;border-radius:20px;border:1px solid var(--line);background:#fff;font-weight:600;cursor:pointer}
 .chips button[aria-pressed=true]{background:var(--accent);color:#fff;border-color:var(--accent)}
-.sortRow{display:flex;gap:6px;align-items:center}
-.sortRow select{flex:1;min-height:40px;padding:6px 10px;font-size:14px}
-.sortRow .btn{min-height:40px;width:44px;padding:0;flex:0 0 auto}
-.sortRow .btn[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:#fff}
+
 .list{display:flex;flex-direction:column}
 .item{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:12px 0;border-top:1px solid var(--soft);cursor:pointer;background:none;border-left:none;border-right:none;border-bottom:none;text-align:left;width:100%}
 .item:first-child{border-top:none}
@@ -98,6 +95,10 @@ nav.tabs .badge{position:absolute;top:4px;right:calc(50% - 30px);background:var(
 <div class="wrap">
   <header class="top">
     <div><h1>Firmabil</h1><div class="muted" id="undertitel">Lager i bilen</div></div>
+    <div class="row" style="flex:0 0 auto;gap:4px;align-items:center">
+      <span class="muted" id="appVersion" style="font-size:12px"></span>
+      <button type="button" id="tandhjul" aria-label="Indstillinger" style="width:44px;height:44px;border:none;background:none;font-size:24px;line-height:1;cursor:pointer;padding:0">⚙️</button>
+    </div>
   </header>
   <div id="syncBar" class="hidden"></div>
 
@@ -110,7 +111,6 @@ nav.tabs .badge{position:absolute;top:4px;right:calc(50% - 30px);background:var(
       </div>
       <div id="sagBox" style="display:flex;flex-direction:column;gap:8px">
         <div class="chips" id="bfChips" role="group" aria-label="Vis kun boligforening"></div>
-        <div class="sortRow" id="sortRow"></div>
         <label class="f">Sag (materialet skrives på timesedlen)
           <select id="sagValg"></select>
         </label>
@@ -170,7 +170,7 @@ nav.tabs .badge{position:absolute;top:4px;right:calc(50% - 30px);background:var(
 <script>
 (function(){
   "use strict";
-  const VERSION = "0.2.0";
+  const VERSION = "0.3.0";
   const $ = id => document.getElementById(id);
   function el(tag, attrs, ...kids){
     const e=document.createElement(tag);
@@ -378,11 +378,12 @@ nav.tabs .badge{position:absolute;top:4px;right:calc(50% - 30px);background:var(
     return liste.slice().sort((a,b)=>{ if(felt==="bf" && !a.bf!==!b.bf) return a.bf? -1 : 1; return key(a,b)*r; });
   }
   function gemSort(felt, op){
+    if(timer.sort && timer.sort.felt===felt && !!timer.sort.op===op) return;
     const prev=timer.sort||{}; const nu=Math.max(Date.now(), (prev.updated||0)+1);
     timer.sort={felt, op, updated:nu};
     timerUd=timerUd.filter(p=>p.id!=="indst-sort");
     sendTilTimer({id:"indst-sort", kind:"indstilling", felt, op, updated:nu});
-    renderSager(); toast("Sortering gemt – gælder også i Timer");
+    renderSager(); toast("Sortering gemt");
   }
   const ANDRE="__andre";
   let bfFilter=""; try{ bfFilter=localStorage.getItem("tm_bf")||""; }catch(e){}
@@ -396,14 +397,31 @@ nav.tabs .badge{position:absolute;top:4px;right:calc(50% - 30px);background:var(
       onclick:()=>{ bfFilter=b; try{ localStorage.setItem("tm_bf",b); }catch(e){} renderSager(); if(efter) efter(); }},
       b===ANDRE? "Andre" : (b? b.slice(0,3) : "Alle"))));
   }
-  function tegnSort(box){
+  // ---- Indstillinger (⚙️): sortering af sager + del link til appen ----
+  const appLink = () => location.origin + "/firmabil-start";
+  function aabnIndst(){
     const {felt,op}=sortIndst();
-    const sel=el("select",{"aria-label":"Sortér sager efter"}, ...[["brugt","Senest brugt"],["nr","Sagsnummer"],["adresse","Adresse"],["bf","Boligforening"],["oprettet","Oprettet"]].map(([v,t])=>el("option",{value:v},"Sortér: "+t)));
-    sel.value=felt; sel.addEventListener("change",()=>gemSort(sel.value, SORT_STD[sel.value]));
-    box.replaceChildren(sel,
-      el("button",{type:"button",class:"btn","aria-pressed":op?"true":"false",title:"Stigende",onclick:()=>gemSort(felt,true)},"↑"),
-      el("button",{type:"button",class:"btn","aria-pressed":op?"false":"true",title:"Faldende",onclick:()=>gemSort(felt,false)},"↓"));
+    const sel=el("select",{"aria-label":"Sortér sager efter"}, ...[["brugt","Senest brugt"],["nr","Sagsnummer"],["adresse","Adresse"],["bf","Boligforening"],["oprettet","Oprettet"]].map(([v,t])=>el("option",{value:v},t)));
+    sel.value=felt; sel.addEventListener("change",()=>{ gemSort(sel.value, SORT_STD[sel.value]); aabnIndst(); });
+    const retning=(v,t)=>el("button",{type:"button",class:"btn"+(op===v?" primary":""),"aria-pressed":op===v?"true":"false",onclick:()=>{ gemSort(felt,v); aabnIndst(); }},t);
+    const link=appLink();
+    const del=async()=>{ if(navigator.share){ try{ await navigator.share({title:"Firmabil",text:"Firmabil – lager i bilen",url:link}); return; }catch(e){ if(e && e.name==="AbortError") return; } } kopier(); };
+    const kopier=async()=>{ try{ await navigator.clipboard.writeText(link); toast("Linket er kopieret"); }catch(e){ toast("Kunne ikke kopiere – markér linket og kopiér selv"); } };
+    aabnArk(
+      arkTop("Indstillinger", "Firmabil v"+VERSION),
+      el("div",{class:"card",style:"margin-top:0"},
+        el("h2",null,"Sortering af sager"),
+        el("label",{class:"f"},"Sortér sager efter", sel),
+        el("div",{class:"f"}, el("span",null,"Rækkefølge"), el("div",{class:"row",role:"group"}, retning(true,"Stigende ↑"), retning(false,"Faldende ↓"))),
+        el("div",{class:"muted",style:"font-size:13px"},"Samme indstilling som i Timer-appen – ændrer du den her, ændres den også dér.")),
+      el("div",{class:"card",style:"margin-top:0"},
+        el("h2",null,"🔗 Del link til appen"),
+        el("div",{class:"kode",style:"padding:10px 12px;border-radius:10px;background:var(--soft);overflow-wrap:anywhere;user-select:all;-webkit-user-select:all"}, link),
+        el("div",{class:"row"}, el("button",{type:"button",class:"btn",onclick:kopier},"Kopiér"), el("button",{type:"button",class:"btn primary",onclick:del},"Del link")),
+        el("div",{class:"muted",style:"font-size:13px"},"Åbn linket i Safari → Del → Føj til hjemmeskærm, så har du Firmabil som app."))
+    );
   }
+  $("tandhjul").addEventListener("click",aabnIndst);
   function sagOptions(sel, valgt){
     const liste=sorterSager(timer.sager.filter(bfMatch));
     sel.replaceChildren(el("option",{value:""},"Ingen sag – kun lager"), ...liste.map(s=>el("option",{value:s.id},sagNavn(s))));
@@ -411,7 +429,7 @@ nav.tabs .badge{position:absolute;top:4px;right:calc(50% - 30px);background:var(
     sel.value=valgt||"";
   }
   function renderSager(){
-    tegnBfChips($("bfChips")); tegnSort($("sortRow")); $("sortRow").classList.toggle("hidden", !timer.sager.length);
+    tegnBfChips($("bfChips"));
     sagOptions($("sagValg"), valgtSag); if(valgtSag && $("sagValg").value!==valgtSag){ valgtSag=""; ls.set("fb_sag",""); }
     let info="";
     if(!HA) info="Timer-appen kan kun nås, når appen åbnes fra Home Assistant.";
@@ -706,7 +724,7 @@ nav.tabs .badge{position:absolute;top:4px;right:calc(50% - 30px);background:var(
   function renderAll(){ renderLager(); renderKoeb(); renderIdag(); renderSoeg(); drawSync(); }
 
   // ================= START =================
-  $("versionTxt").textContent="Firmabil v"+VERSION;
+  $("versionTxt").textContent="Firmabil v"+VERSION; $("appVersion").textContent="v"+VERSION;
   renderMode(); renderSager(); renderAll();
   if("serviceWorker" in navigator && HA) navigator.serviceWorker.register("sw.js").catch(()=>{});
   (async()=>{
